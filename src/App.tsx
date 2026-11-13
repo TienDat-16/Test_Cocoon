@@ -47,10 +47,11 @@ function initializeUsers(): User[] {
   return migrated;
 }
 // Keep the checkout display and the saved order totals consistent.
-function calculateCheckoutTotals(cartTotal: number, address: string, couponCode: string) {
+function calculateCheckoutTotals(cartTotal: number, address: string, couponCode: string, shippingCode: string = '') {
   const code = couponCode.trim().toUpperCase();
+  const normalizedShippingCode = shippingCode.trim().toUpperCase();
   const coupon = COUPONS.find(c => c.code === code);
-  const freeShipping = code === FREESHIP_COUPON.code && cartTotal > 0 && cartTotal >= FREESHIP_COUPON.minOrder;
+  const freeShipping = normalizedShippingCode === FREESHIP_COUPON.code && cartTotal > 0 && cartTotal >= FREESHIP_COUPON.minOrder;
   const validCoupon = coupon && cartTotal > 0 && cartTotal >= coupon.minOrder ? coupon : null;
   const couponDiscount = validCoupon ? Math.round(cartTotal * validCoupon.discount / 100) : 0;
   const addressLower = address.toLowerCase();
@@ -67,7 +68,8 @@ function calculateCheckoutTotals(cartTotal: number, address: string, couponCode:
     shippingFee,
     couponDiscount,
     finalTotal: Math.max(0, cartTotal - couponDiscount + shippingFee),
-    appliedCouponCode: freeShipping || validCoupon ? code : '',
+    appliedCouponCode: validCoupon ? code : '',
+    appliedShippingCode: freeShipping ? normalizedShippingCode : '',
   };
 }
 
@@ -209,8 +211,8 @@ export default function App() {
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   // Order functions
-  const placeOrder = (customerName: string, customerPhone: string, customerAddress: string, paymentMethod: string, couponCode: string) => {
-    const { shippingFee, couponDiscount, finalTotal } = calculateCheckoutTotals(cartTotal, customerAddress, couponCode);
+  const placeOrder = (customerName: string, customerPhone: string, customerAddress: string, paymentMethod: string, couponCode: string, shippingCode: string) => {
+    const { shippingFee, couponDiscount, finalTotal } = calculateCheckoutTotals(cartTotal, customerAddress, couponCode, shippingCode);
 
     const newOrder: Order = {
       id: 'ORD-' + Date.now().toString(36).toUpperCase(),
@@ -1013,7 +1015,7 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
   cart: CartItem[];
   cartTotal: number;
   currentUser: User | null;
-  onPlaceOrder: (name: string, phone: string, address: string, payment: string, couponCode: string) => Order;
+  onPlaceOrder: (name: string, phone: string, address: string, payment: string, couponCode: string, shippingCode: string) => Order;
   onBack: () => void;
   showToast: (msg: string, type?: string) => void;
 }) {
@@ -1023,13 +1025,15 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
   const [paymentMethod, setPaymentMethod] = useState('cod');
   const [couponInput, setCouponInput] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState('');
+  const [shippingInput, setShippingInput] = useState('');
+  const [appliedShipping, setAppliedShipping] = useState('');
   const [orderSuccess, setOrderSuccess] = useState<Order | null>(null);
 
-  const { shippingFee, couponDiscount, finalTotal, appliedCouponCode } = calculateCheckoutTotals(cartTotal, address, appliedCoupon);
+  const { shippingFee, couponDiscount, finalTotal, appliedCouponCode, appliedShippingCode } = calculateCheckoutTotals(cartTotal, address, appliedCoupon, appliedShipping);
 
   const handleApplyCoupon = () => {
     const code = couponInput.trim().toUpperCase();
-    const coupon = code === FREESHIP_COUPON.code ? FREESHIP_COUPON : COUPONS.find(c => c.code === code);
+    const coupon = COUPONS.find(c => c.code === code);
     if (!coupon) {
       showToast('Mã giảm giá không hợp lệ!', 'error');
       return;
@@ -1044,9 +1048,26 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
     }
     setAppliedCoupon(code);
     setCouponInput(code);
-    showToast(code === FREESHIP_COUPON.code
-      ? 'Đã áp dụng FREESHIP: miễn phí vận chuyển!'
-      : `Đã áp dụng mã ${code}!`, 'success');
+    showToast(`Áp dụng voucher ${code} giảm ${coupon.discount}%!`, 'success');
+  };
+
+  const handleApplyShipping = () => {
+    const code = shippingInput.trim().toUpperCase();
+    if (code !== FREESHIP_COUPON.code) {
+      showToast('Mã miễn phí vận chuyển không hợp lệ!', 'error');
+      return;
+    }
+    if (cart.length === 0 || cartTotal <= 0) {
+      showToast('Vui lòng thêm sản phẩm vào giỏ hàng!', 'error');
+      return;
+    }
+    if (cartTotal < FREESHIP_COUPON.minOrder) {
+      showToast(`Đơn hàng tối thiểu ${formatPrice(FREESHIP_COUPON.minOrder)} để dùng mã freeship!`, 'error');
+      return;
+    }
+    setAppliedShipping(code);
+    setShippingInput(code);
+    showToast('Đã áp dụng FREESHIP: miễn phí vận chuyển!', 'success');
   };
 
   const handleSubmitOrder = () => {
@@ -1058,7 +1079,7 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
       showToast('Vui lòng điền đầy đủ thông tin giao hàng!', 'error');
       return;
     }
-    const order = onPlaceOrder(name, phone, address, paymentMethod, appliedCouponCode);
+    const order = onPlaceOrder(name, phone, address, paymentMethod, appliedCouponCode, appliedShippingCode);
     setOrderSuccess(order);
   };
 
@@ -1115,12 +1136,12 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
 
           {/* Coupon */}
           <div className="bg-white rounded-xl shadow-sm p-6">
-            <h3 className="font-bold text-gray-800 mb-4"><i className="fas fa-tag mr-2 text-green-600"></i> Mã giảm giá</h3>
+            <h3 className="font-bold text-gray-800 mb-4"><i className="fas fa-tag mr-2 text-green-600"></i> Voucher giảm giá</h3>
             <div className="flex gap-2">
               <input
                 type="text"
                 id="coupon-input"
-                placeholder="Nhập mã voucher (VD: FREESHIP)"
+                placeholder="Nhập mã voucher (VD: COCOON10)"
                 value={couponInput}
                 onChange={(e) => setCouponInput(e.target.value)}
                 className="flex-1"
@@ -1129,12 +1150,35 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
                 Áp dụng
               </button>
             </div>
-            <p className="text-xs text-gray-500 mt-2">FREESHIP: miễn phí vận chuyển, không yêu cầu giá trị đơn tối thiểu. Mỗi đơn áp dụng một mã.</p>
-            <p className="text-xs text-gray-400 mt-1">Mã giảm giá khác: COCOON10, VEGAN20, NEWUSER</p>
+            <p className="text-xs text-gray-400 mt-2">Thử: COCOON10, VEGAN20, NEWUSER</p>
             {appliedCouponCode && (
               <div id="applied-coupon" className="flex items-center justify-between gap-2 mt-3 text-sm text-green-700" role="status">
                 <span>Đang áp dụng: <strong>{appliedCouponCode}</strong></span>
                 <button id="btn-remove-coupon" type="button" className="underline" onClick={() => { setAppliedCoupon(''); setCouponInput(''); }}>Gỡ mã</button>
+              </div>
+            )}
+          </div>
+
+          {/* Shipping voucher is independent of the product discount. */}
+          <div id="shipping-voucher-section" className="bg-white rounded-xl shadow-sm p-6">
+            <h3 className="font-bold text-gray-800 mb-4"><i className="fas fa-truck mr-2 text-green-600"></i> Mã miễn phí vận chuyển</h3>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                id="shipping-coupon-input"
+                aria-label="Mã miễn phí vận chuyển"
+                placeholder="Nhập mã freeship (VD: FREESHIP)"
+                value={shippingInput}
+                onChange={(e) => setShippingInput(e.target.value)}
+                className="flex-1"
+              />
+              <button id="btn-apply-shipping-coupon" className="btn-secondary whitespace-nowrap" onClick={handleApplyShipping}>Áp dụng</button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">FREESHIP: miễn phí vận chuyển, không yêu cầu giá trị đơn tối thiểu. Dùng cùng một voucher giảm giá.</p>
+            {appliedShippingCode && (
+              <div id="applied-shipping-coupon" className="flex items-center justify-between gap-2 mt-3 text-sm text-green-700" role="status">
+                <span>Đang áp dụng: <strong>{appliedShippingCode}</strong></span>
+                <button id="btn-remove-shipping-coupon" type="button" className="underline" onClick={() => { setAppliedShipping(''); setShippingInput(''); }}>Gỡ mã freeship</button>
               </div>
             )}
           </div>
