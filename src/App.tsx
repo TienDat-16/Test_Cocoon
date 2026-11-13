@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Product, CartItem, User, Order } from './types';
-import { PRODUCTS, COUPONS, FREE_SHIPPING_THRESHOLD, SHIPPING_FEE_MAP, ADMIN_ACCOUNT, DEFAULT_CUSTOMER_ACCOUNTS, CATEGORIES, formatPrice } from './data';
+import { PRODUCTS, COUPONS, FREESHIP_COUPON, FREE_SHIPPING_THRESHOLD, SHIPPING_FEE_MAP, ADMIN_ACCOUNT, DEFAULT_CUSTOMER_ACCOUNTS, CATEGORIES, formatPrice } from './data';
 import SeleniumGuide from './SeleniumGuide';
 
 // Helper functions for localStorage
@@ -46,6 +46,31 @@ function initializeUsers(): User[] {
   }
   return migrated;
 }
+// Keep the checkout display and the saved order totals consistent.
+function calculateCheckoutTotals(cartTotal: number, address: string, couponCode: string) {
+  const code = couponCode.trim().toUpperCase();
+  const coupon = COUPONS.find(c => c.code === code);
+  const freeShipping = code === FREESHIP_COUPON.code && cartTotal > 0 && cartTotal >= FREESHIP_COUPON.minOrder;
+  const validCoupon = coupon && cartTotal > 0 && cartTotal >= coupon.minOrder ? coupon : null;
+  const couponDiscount = validCoupon ? Math.round(cartTotal * validCoupon.discount / 100) : 0;
+  const addressLower = address.toLowerCase();
+  let shippingFee = SHIPPING_FEE_MAP['default'];
+  if (addressLower.includes('hcm') || addressLower.includes('hồ chí minh') || addressLower.includes('sài gòn')) {
+    shippingFee = SHIPPING_FEE_MAP['hcm'];
+  } else if (addressLower.includes('hà nội') || addressLower.includes('hn')) {
+    shippingFee = SHIPPING_FEE_MAP['hn'];
+  } else if (addressLower.includes('đà nẵng') || addressLower.includes('danang')) {
+    shippingFee = SHIPPING_FEE_MAP['danang'];
+  }
+  if (cartTotal >= FREE_SHIPPING_THRESHOLD || freeShipping) shippingFee = 0;
+  return {
+    shippingFee,
+    couponDiscount,
+    finalTotal: Math.max(0, cartTotal - couponDiscount + shippingFee),
+    appliedCouponCode: freeShipping || validCoupon ? code : '',
+  };
+}
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -184,22 +209,8 @@ export default function App() {
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
   // Order functions
-  const placeOrder = (customerName: string, customerPhone: string, customerAddress: string, paymentMethod: string, couponDiscount: number) => {
-    const addressLower = customerAddress.toLowerCase();
-    let shippingFee = SHIPPING_FEE_MAP['default'];
-    if (addressLower.includes('hcm') || addressLower.includes('hồ chí minh') || addressLower.includes('sài gòn')) {
-      shippingFee = SHIPPING_FEE_MAP['hcm'];
-    } else if (addressLower.includes('hà nội') || addressLower.includes('hn')) {
-      shippingFee = SHIPPING_FEE_MAP['hn'];
-    } else if (addressLower.includes('đà nẵng') || addressLower.includes('danang')) {
-      shippingFee = SHIPPING_FEE_MAP['danang'];
-    }
-
-    if (cartTotal >= FREE_SHIPPING_THRESHOLD) {
-      shippingFee = 0;
-    }
-
-    const finalTotal = cartTotal - couponDiscount + shippingFee;
+  const placeOrder = (customerName: string, customerPhone: string, customerAddress: string, paymentMethod: string, couponCode: string) => {
+    const { shippingFee, couponDiscount, finalTotal } = calculateCheckoutTotals(cartTotal, customerAddress, couponCode);
 
     const newOrder: Order = {
       id: 'ORD-' + Date.now().toString(36).toUpperCase(),
@@ -1002,7 +1013,7 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
   cart: CartItem[];
   cartTotal: number;
   currentUser: User | null;
-  onPlaceOrder: (name: string, phone: string, address: string, payment: string, couponDiscount: number) => Order;
+  onPlaceOrder: (name: string, phone: string, address: string, payment: string, couponCode: string) => Order;
   onBack: () => void;
   showToast: (msg: string, type?: string) => void;
 }) {
@@ -1011,43 +1022,43 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
   const [address, setAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('cod');
   const [couponInput, setCouponInput] = useState('');
-  const [couponDiscount, setCouponDiscount] = useState(0);
+  const [appliedCoupon, setAppliedCoupon] = useState('');
   const [orderSuccess, setOrderSuccess] = useState<Order | null>(null);
 
-  const addressLower = address.toLowerCase();
-  let shippingFee = SHIPPING_FEE_MAP['default'];
-  if (addressLower.includes('hcm') || addressLower.includes('hồ chí minh') || addressLower.includes('sài gòn')) {
-    shippingFee = SHIPPING_FEE_MAP['hcm'];
-  } else if (addressLower.includes('hà nội') || addressLower.includes('hn')) {
-    shippingFee = SHIPPING_FEE_MAP['hn'];
-  } else if (addressLower.includes('đà nẵng') || addressLower.includes('danang')) {
-    shippingFee = SHIPPING_FEE_MAP['danang'];
-  }
-  if (cartTotal >= FREE_SHIPPING_THRESHOLD) shippingFee = 0;
-
-  const finalTotal = Math.max(0, cartTotal - couponDiscount + shippingFee);
+  const { shippingFee, couponDiscount, finalTotal, appliedCouponCode } = calculateCheckoutTotals(cartTotal, address, appliedCoupon);
 
   const handleApplyCoupon = () => {
-    const coupon = COUPONS.find(c => c.code === couponInput.toUpperCase());
+    const code = couponInput.trim().toUpperCase();
+    const coupon = code === FREESHIP_COUPON.code ? FREESHIP_COUPON : COUPONS.find(c => c.code === code);
     if (!coupon) {
       showToast('Mã giảm giá không hợp lệ!', 'error');
+      return;
+    }
+    if (cart.length === 0 || cartTotal <= 0) {
+      showToast('Vui lòng thêm sản phẩm vào giỏ hàng!', 'error');
       return;
     }
     if (cartTotal < coupon.minOrder) {
       showToast(`Đơn hàng tối thiểu ${formatPrice(coupon.minOrder)} để áp dụng mã này!`, 'error');
       return;
     }
-    const discount = Math.round(cartTotal * coupon.discount / 100);
-    setCouponDiscount(discount);
-    showToast(`Áp dụng mã ${coupon.code} giảm ${coupon.discount}%!`, 'success');
+    setAppliedCoupon(code);
+    setCouponInput(code);
+    showToast(code === FREESHIP_COUPON.code
+      ? 'Đã áp dụng FREESHIP: miễn phí vận chuyển!'
+      : `Đã áp dụng mã ${code}!`, 'success');
   };
 
   const handleSubmitOrder = () => {
+    if (cart.length === 0 || cartTotal <= 0) {
+      showToast('Vui lòng thêm sản phẩm vào giỏ hàng!', 'error');
+      return;
+    }
     if (!name || !phone || !address) {
       showToast('Vui lòng điền đầy đủ thông tin giao hàng!', 'error');
       return;
     }
-    const order = onPlaceOrder(name, phone, address, paymentMethod, couponDiscount);
+    const order = onPlaceOrder(name, phone, address, paymentMethod, appliedCouponCode);
     setOrderSuccess(order);
   };
 
@@ -1109,7 +1120,7 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
               <input
                 type="text"
                 id="coupon-input"
-                placeholder="Nhập mã giảm giá (VD: COCOON10)"
+                placeholder="Nhập mã voucher (VD: FREESHIP)"
                 value={couponInput}
                 onChange={(e) => setCouponInput(e.target.value)}
                 className="flex-1"
@@ -1118,7 +1129,14 @@ function CheckoutPage({ cart, cartTotal, currentUser, onPlaceOrder, onBack, show
                 Áp dụng
               </button>
             </div>
-            <p className="text-xs text-gray-400 mt-2">Thử: COCOON10, VEGAN20, NEWUSER</p>
+            <p className="text-xs text-gray-500 mt-2">FREESHIP: miễn phí vận chuyển, không yêu cầu giá trị đơn tối thiểu. Mỗi đơn áp dụng một mã.</p>
+            <p className="text-xs text-gray-400 mt-1">Mã giảm giá khác: COCOON10, VEGAN20, NEWUSER</p>
+            {appliedCouponCode && (
+              <div id="applied-coupon" className="flex items-center justify-between gap-2 mt-3 text-sm text-green-700" role="status">
+                <span>Đang áp dụng: <strong>{appliedCouponCode}</strong></span>
+                <button id="btn-remove-coupon" type="button" className="underline" onClick={() => { setAppliedCoupon(''); setCouponInput(''); }}>Gỡ mã</button>
+              </div>
+            )}
           </div>
 
           {/* Payment */}

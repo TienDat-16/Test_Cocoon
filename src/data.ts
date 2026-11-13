@@ -124,6 +124,8 @@ export const COUPONS: Coupon[] = [
   { code: 'NEWUSER', discount: 15, minOrder: 200000 },
 ];
 
+export const FREESHIP_COUPON = { code: 'FREESHIP', minOrder: 0 };
+
 export const FREE_SHIPPING_THRESHOLD = 500000;
 
 export const SHIPPING_FEE_MAP: Record<string, number> = {
