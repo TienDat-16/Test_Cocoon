@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Product, CartItem, User, Order } from './types';
-import { PRODUCTS, COUPONS, FREE_SHIPPING_THRESHOLD, SHIPPING_FEE_MAP, ADMIN_ACCOUNT, CATEGORIES, formatPrice } from './data';
+import { PRODUCTS, COUPONS, FREE_SHIPPING_THRESHOLD, SHIPPING_FEE_MAP, ADMIN_ACCOUNT, DEFAULT_CUSTOMER_ACCOUNTS, CATEGORIES, formatPrice } from './data';
 import SeleniumGuide from './SeleniumGuide';
 
 // Helper functions for localStorage
@@ -17,33 +17,40 @@ function saveToStorage<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-// Initialize admin account & migrate data
-function initAdmin() {
+// Initialize built-in accounts and migrate legacy users before React state is created.
+// This prevents the initial empty users state from overwriting localStorage.
+function initializeUsers(): User[] {
   const users = getFromStorage<User[]>('cocoon_users', []);
-  // Migrate: add isLocked field for old users
-  let needsSave = false;
-  const migrated = users.map(u => {
-    if (u.isLocked === undefined) {
-      needsSave = true;
-      return { ...u, isLocked: false };
+  let changed = false;
+  const migrated = users.map(user => {
+    if (user.isLocked === undefined) {
+      changed = true;
+      return { ...user, isLocked: false };
     }
-    return u;
+    return user;
   });
-  // Add admin if not exists
-  if (!migrated.find(u => u.id === ADMIN_ACCOUNT.id)) {
-    migrated.push(ADMIN_ACCOUNT);
-    needsSave = true;
+
+  const defaults: User[] = [ADMIN_ACCOUNT, ...DEFAULT_CUSTOMER_ACCOUNTS];
+  for (const account of defaults) {
+    const exists = migrated.some(user =>
+      user.id === account.id || user.email.toLowerCase() === account.email.toLowerCase()
+    );
+    if (!exists) {
+      migrated.push(account);
+      changed = true;
+    }
   }
-  if (needsSave) {
+
+  if (changed || localStorage.getItem('cocoon_users') === null) {
     saveToStorage('cocoon_users', migrated);
   }
+  return migrated;
 }
-
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
+  const [users, setUsers] = useState<User[]>(initializeUsers);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('Tất cả');
   const [showAuthModal, setShowAuthModal] = useState(false);
@@ -60,16 +67,13 @@ export default function App() {
 
   // Load data on mount
   useEffect(() => {
-    initAdmin();
     const savedUser = getFromStorage<User | null>('cocoon_current_user', null);
     const savedCart = getFromStorage<CartItem[]>('cocoon_cart', []);
     const savedOrders = getFromStorage<Order[]>('cocoon_orders', []);
-    const savedUsers = getFromStorage<User[]>('cocoon_users', []);
     const savedProducts = getFromStorage<Product[] | null>('cocoon_products', null);
     setCurrentUser(savedUser);
     setCart(savedCart);
     setOrders(savedOrders);
-    setUsers(savedUsers);
     if (savedProducts) setProducts(savedProducts);
   }, []);
 
